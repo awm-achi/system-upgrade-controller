@@ -217,10 +217,33 @@ func SelectConcurrentNodes(plan *upgradeapiv1.Plan, nodeCache corectlv1.NodeCach
 		// plan resource version which, due to undefined ordering when listing nodes, was causing more jobs to be
 		// generated than dictated by the plan concurrency
 		sort.Slice(candidateNodes, func(i, j int) bool {
+			//Check if node has unreachable taint
+			hasUnreachableTaint := func(node *corev1.Node) bool {
+				for _, taint := range node.Spec.Taints {
+					if taint.Key == corev1.TaintNodeUnreachable {
+						return true
+					}
+				}
+				return false
+			}
+
+			//determine if nodes are reachable or unreachable
+			iUnreachable := hasUnreachableTaint(candidateNodes[i])
+			jUnreachable := hasUnreachableTaint(candidateNodes[j])
+
+			// if i is unreachable (true) and j is reachable (false), i should come after j (return false)
+			// if i is reachable (false) and j is unreachable (true), i should come before j (return true)
+			if iUnreachable != jUnreachable {
+				return !iUnreachable
+			}
+
+			// if both nodes are unreachable, sort by UID to preserve deterministic ordering
 			isum := sha256sum(string(candidateNodes[i].UID), string(plan.UID), plan.Status.LatestHash)
 			jsum := sha256sum(string(candidateNodes[j].UID), string(plan.UID), plan.Status.LatestHash)
 			return isum < jsum
 		})
+		//TODO: Debug Logging Remove
+		logrus.Debugf("Sorted candidate nodes: %v", candidateNodes)
 
 		for i := 0; i < len(candidateNodes) && int64(len(selected)) < plan.Spec.Concurrency; i++ {
 			selected = append(selected, candidateNodes[i].DeepCopy())
